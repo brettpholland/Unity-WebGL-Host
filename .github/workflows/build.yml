@@ -1,0 +1,71 @@
+name: Build desktop apps
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-14, windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Linux needs Tk headers for the bundled GUI
+      - name: Install Tk on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          case "${{ runner.os }}" in
+            "macOS")
+              ICON=""; [ -f assets/icon.icns ] && ICON="--icon assets/icon.icns"
+              python -m PyInstaller --windowed $ICON --name "Unity WebGL Server" UnityWebGLServer.py
+              ;;
+            "Windows")
+              ICON=""; [ -f assets/icon.ico ] && ICON="--icon assets/icon.ico"
+              python -m PyInstaller --noconsole $ICON --name "Unity WebGL Server" UnityWebGLServer.py
+              ;;
+            "Linux")
+              ICON=""; [ -f assets/icon.png ] && ICON="--icon assets/icon.png"
+              python -m PyInstaller --noconsole $ICON --name "unity-webgl-server" UnityWebGLServer.py
+              ;;
+          esac
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -e
+          OS="${{ runner.os }}"
+          ARCH="${{ runner.arch }}"     # X64 or ARM64 on macOS/Windows; X64 on Ubuntu runners
+          mkdir -p release
+
+          if [ "$OS" = "macOS" ]; then
+            APP="dist/Unity WebGL Server.app"
+            # Zip preserving app bundle metadata
+            ditto -c -k --sequesterRsrc --keepParent "$APP" "release/Unity-WebGL-Server-macOS-${ARCH}.zip"
+          elif [ "$OS" = "Windows" ]; then
+            # Use PowerShell to zip the folder containing the EXE
+            pwsh -Command 'Compress-Archive -Path "dist/Unity WebGL Server/*" -DestinationPath "release/Unity-WebGL-Server-windows-${{ runner.arch }}.zip" -Force'
+          else
+            # Linux: tar.gz the output directory
+            tar -czf "release/unity-webgl-server-linux-${ARCH}.tar.gz" -C dist unity-webgl-server
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ runner.os }}-${{ runner.arch }}
+          path: release/*
+          retention-days: 30
